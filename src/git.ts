@@ -164,5 +164,6 @@ export async function syncBranch(
     p.log.error('Merge conflict or push failure — merge aborted. Please resolve manually.');
   } finally {
     runInherit(`git checkout "${originalBranch}"`);
+    runInherit(`git push origin "${originalBranch}"`);
   }
 }

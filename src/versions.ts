@@ -24,5 +24,5 @@ export function bumpVersionFiles(version: string, filePaths: string[], cwd: stri
   }
   const relPaths = filePaths.map((f) => `"${path.isAbsolute(f) ? path.relative(cwd, f) : f}"`).join(' ');
   runInherit(`git -C "${cwd}" add ${relPaths}`);
-  runInherit(`git -C "${cwd}" commit -m "chore(release): ${version}"`);
+  runInherit(`git -C "${cwd}" commit -m "chore(release): bump to ${version}"`);
 }
