@@ -18,23 +18,15 @@ import { listBranches } from "./git.js";
 import { BACK, cancelAsBack, isBack } from "./prompts-util.js";
 import { isValidBranchName } from "./validate.js";
 
-async function editBoolean(
-  message: string,
-  current: boolean,
-): Promise<boolean | typeof BACK> {
-  const choice = cancelAsBack(
-    await p.confirm({ message, initialValue: current }),
-  );
+async function editBoolean(message: string, current: boolean): Promise<boolean | typeof BACK> {
+  const choice = cancelAsBack(await p.confirm({ message, initialValue: current }));
   if (isBack(choice)) {
     return BACK;
   }
   return choice;
 }
 
-async function pickBranch(
-  cwd: string,
-  message: string,
-): Promise<string | typeof BACK> {
+async function pickBranch(cwd: string, message: string): Promise<string | typeof BACK> {
   const branches = listBranches(cwd);
   if (branches.length === 0) {
     p.log.warn("No branches found.");
@@ -116,10 +108,7 @@ async function editType(config: XEployConfig, cwd: string): Promise<void> {
   }
 }
 
-async function editCreatePr(
-  createPr: Record<CreatePrEnv, boolean>,
-  cwd: string,
-): Promise<void> {
+async function editCreatePr(createPr: Record<CreatePrEnv, boolean>, cwd: string): Promise<void> {
   void cwd;
   while (true) {
     const env = cancelAsBack(
@@ -162,10 +151,7 @@ async function editEnvironments(
       return;
     }
 
-    const branch = await pickBranch(
-      cwd,
-      `Branch for "${env}" (type to filter in list):`,
-    );
+    const branch = await pickBranch(cwd, `Branch for "${env}" (type to filter in list):`);
     if (isBack(branch)) {
       continue;
     }
@@ -174,10 +160,7 @@ async function editEnvironments(
   }
 }
 
-async function editSubprojectsConfig(
-  config: XEployConfig,
-  cwd: string,
-): Promise<void> {
+async function editSubprojectsConfig(config: XEployConfig, cwd: string): Promise<void> {
   if (!config.subprojects || config.subprojects.length === 0) {
     p.log.warn('No subprojects configured. Set type to "mono" or "meta" first.');
     return;
@@ -205,9 +188,10 @@ async function editSubprojectsConfig(
     }
 
     while (true) {
-      const fieldOptions: { label: string; value: "enabled" | "create_pr" | "create_tag" | "environments" }[] = [
-        { label: `enabled: ${entry.enabled}`, value: "enabled" },
-      ];
+      const fieldOptions: {
+        label: string;
+        value: "enabled" | "create_pr" | "create_tag" | "environments";
+      }[] = [{ label: `enabled: ${entry.enabled}`, value: "enabled" }];
       if (isMeta) {
         fieldOptions.push(
           { label: `create_tag: ${entry.create_tag ?? true}`, value: "create_tag" },
@@ -227,10 +211,7 @@ async function editSubprojectsConfig(
       }
 
       if (field === "enabled") {
-        const value = await editBoolean(
-          `Enable "${repo}" for release/bump?`,
-          entry.enabled,
-        );
+        const value = await editBoolean(`Enable "${repo}" for release/bump?`, entry.enabled);
         if (!isBack(value)) {
           entry.enabled = value;
         }
@@ -292,9 +273,7 @@ type ConfigKey =
   | "environments"
   | "subprojects";
 
-function configMenuOptions(
-  config: XEployConfig,
-): { label: string; value: ConfigKey }[] {
+function configMenuOptions(config: XEployConfig): { label: string; value: ConfigKey }[] {
   const options: { label: string; value: ConfigKey }[] = [
     { label: `type: ${config.type}`, value: "type" },
     {
@@ -349,10 +328,7 @@ export async function runConfigEditor(
     const key = cancelAsBack(
       await p.select<ConfigKey | "done">({
         message: "Select config to edit",
-        options: [
-          ...configMenuOptions(config),
-          { label: "Done", value: "done" },
-        ],
+        options: [...configMenuOptions(config), { label: "Done", value: "done" }],
       }),
     );
     if (isBack(key)) {
@@ -388,10 +364,7 @@ export async function runConfigEditor(
         break;
       }
       case "generate_release_notes": {
-        const value = await editBoolean(
-          "Generate release notes?",
-          config.generate_release_notes,
-        );
+        const value = await editBoolean("Generate release notes?", config.generate_release_notes);
         if (!isBack(value)) {
           config.generate_release_notes = value;
         }
@@ -409,7 +382,7 @@ export async function runConfigEditor(
       }
       case "create_tag": {
         const value = await editBoolean(
-          "Create git tag and GitHub release (false = bump package.json only)?",
+          "Create git tag and GitHub release (false = bump version file only)?",
           config.create_tag,
         );
         if (!isBack(value)) {

@@ -1,40 +1,22 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { type AppType, detectAppType, isProjectRoot, resolveVersionFileName } from "./app-type.js";
 import { parseSubmodules } from "./discover.js";
 import { getRawTags, listBranches } from "./git.js";
-import {
-  assertBranchName,
-  assertRepoRelativePath,
-  isValidBranchName,
-} from "./validate.js";
 import { detectTagPrefix } from "./semver.js";
+import { assertBranchName, assertRepoRelativePath, isValidBranchName } from "./validate.js";
 
 export type RepoType = "default" | "mono" | "meta";
+export type { AppType } from "./app-type.js";
 export type EnvName = "develop" | "staging" | "uat" | "sandbox" | "production";
 export type CreatePrEnv = "staging" | "uat" | "sandbox" | "production";
 export type ReleaseEnv = "staging" | "uat" | "sandbox" | "production";
 
 export const CONFIG_FILE = ".xeploy.json";
 
-export const ENV_NAMES: EnvName[] = [
-  "develop",
-  "staging",
-  "uat",
-  "sandbox",
-  "production",
-];
-export const CREATE_PR_ENVS: CreatePrEnv[] = [
-  "staging",
-  "uat",
-  "sandbox",
-  "production",
-];
-export const RELEASE_ENVS: ReleaseEnv[] = [
-  "staging",
-  "uat",
-  "sandbox",
-  "production",
-];
+export const ENV_NAMES: EnvName[] = ["develop", "staging", "uat", "sandbox", "production"];
+export const CREATE_PR_ENVS: CreatePrEnv[] = ["staging", "uat", "sandbox", "production"];
+export const RELEASE_ENVS: ReleaseEnv[] = ["staging", "uat", "sandbox", "production"];
 
 export const RC_ENVS: ReleaseEnv[] = ["staging", "uat"];
 export const FINAL_ENVS: ReleaseEnv[] = ["sandbox", "production"];
@@ -50,6 +32,8 @@ const DEFAULT_ENV_BRANCH_NAMES: Record<EnvName, string> = {
 export interface SubprojectConfig {
   repo: string;
   enabled: boolean;
+  /** Auto-detected from `package.json` vs `pubspec.yaml` when omitted. */
+  appType?: AppType;
   // meta-only overrides (submodules are separate repos with their own PR/branch mapping)
   create_pr?: Record<CreatePrEnv, boolean>;
   create_tag?: boolean;
@@ -63,6 +47,8 @@ export interface SubprojectSelection {
 
 export interface XEployConfig {
   type: RepoType;
+  /** Auto-detected from `package.json` vs `pubspec.yaml` when omitted. */
+  appType?: AppType;
   subprojectsDir: string | null;
   tag_prefix: string;
   generate_release_notes: boolean;
@@ -82,9 +68,7 @@ function defaultCreatePr(): Record<CreatePrEnv, boolean> {
   };
 }
 
-export function mapEnvironmentsToBranches(
-  branches: string[],
-): Record<EnvName, string | null> {
+export function mapEnvironmentsToBranches(branches: string[]): Record<EnvName, string | null> {
   const mapped = {} as Record<EnvName, string | null>;
   for (const env of ENV_NAMES) {
     const expected = DEFAULT_ENV_BRANCH_NAMES[env];
@@ -97,24 +81,29 @@ export function detectRepoType(cwd: string): RepoType {
   if (fs.existsSync(path.join(cwd, ".gitmodules"))) {
     return "meta";
   }
-  const pkgCount = countPackageJsonFiles(cwd);
-  if (pkgCount > 1) {
+  const projectCount = countProjectRoots(cwd);
+  if (projectCount > 1) {
     return "mono";
   }
   return "default";
 }
 
-function countPackageJsonFiles(cwd: string): number {
-  let count = 0;
+function countProjectRoots(cwd: string): number {
+  const roots = new Set<string>();
   walkDir(cwd, (file) => {
-    if (
-      path.basename(file) === "package.json" &&
-      !file.includes("node_modules")
-    ) {
-      count++;
+    if (file.includes("node_modules")) {
+      return;
+    }
+    const base = path.basename(file);
+    if (base !== "package.json" && base !== "pubspec.yaml") {
+      return;
+    }
+    const dir = path.dirname(file);
+    if (isProjectRoot(dir)) {
+      roots.add(dir);
     }
   });
-  return count;
+  return roots.size;
 }
 
 function shouldSkipDir(name: string): boolean {
@@ -146,7 +135,8 @@ export function detectSubprojectsDir(cwd: string): string | null {
 
   const dirCounts = new Map<string, number>();
   walkDir(cwd, (file) => {
-    if (path.basename(file) !== "package.json") {
+    const base = path.basename(file);
+    if (base !== "package.json" && base !== "pubspec.yaml") {
       return;
     }
     const rel = path.relative(cwd, path.dirname(file));
@@ -171,10 +161,7 @@ export function detectSubprojectsDir(cwd: string): string | null {
   return best;
 }
 
-function discoverMonoSubprojectNames(
-  cwd: string,
-  subprojectsDir: string | null,
-): string[] {
+function discoverMonoSubprojectNames(cwd: string, subprojectsDir: string | null): string[] {
   if (!subprojectsDir) {
     return [];
   }
@@ -189,7 +176,7 @@ function discoverMonoSubprojectNames(
     if (!entry.isDirectory() || shouldSkipDir(entry.name)) {
       continue;
     }
-    if (fs.existsSync(path.join(parent, entry.name, "package.json"))) {
+    if (isProjectRoot(path.join(parent, entry.name))) {
       names.push(entry.name);
     }
   }
@@ -220,9 +207,7 @@ export function buildSubprojectsConfig(
   branches: string[],
 ): SubprojectConfig[] {
   if (type === "meta") {
-    return parseSubmodules(cwd).map((sub) =>
-      defaultSubprojectEntry(sub.name, type, branches),
-    );
+    return parseSubmodules(cwd).map((sub) => defaultSubprojectEntry(sub.name, type, branches));
   }
   if (type === "mono") {
     return discoverMonoSubprojectNames(cwd, subprojectsDir).map((name) =>
@@ -236,10 +221,20 @@ export function getEnabledSubprojects(config: XEployConfig): SubprojectConfig[] 
   return (config.subprojects ?? []).filter((s) => s.enabled);
 }
 
+function resolveVersionFileRel(cwd: string, dir: string, appTypeOverride?: AppType): string {
+  const fileName =
+    resolveVersionFileName(dir, appTypeOverride) ??
+    (detectAppType(dir, appTypeOverride) === "flutter" ? "pubspec.yaml" : "package.json");
+  const rel = path.relative(cwd, path.join(dir, fileName));
+  assertRepoRelativePath(cwd, rel);
+  return rel;
+}
+
 /**
- * Version files (always `package.json`) for the umbrella/root repo plus any
- * enabled, selected mono subprojects. Meta submodules bump their own
- * `package.json` from within their own working directory instead (see meta.ts).
+ * Version files (`package.json` or `pubspec.yaml`, auto-detected) for the
+ * umbrella/root repo plus any enabled, selected mono subprojects. Meta
+ * submodules bump their own version file from within their working directory
+ * instead (see meta.ts).
  */
 export function resolveVersionFiles(
   config: XEployConfig,
@@ -247,24 +242,33 @@ export function resolveVersionFiles(
   selection?: SubprojectSelection,
 ): string[] {
   if (config.type !== "mono" || !config.subprojectsDir) {
-    return ["package.json"];
+    return [resolveVersionFileRel(cwd, cwd, config.appType)];
   }
 
   const files: string[] = [];
   if (!selection || selection.includeUmbrella) {
-    files.push("package.json");
+    files.push(resolveVersionFileRel(cwd, cwd, config.appType));
   }
 
   for (const sub of getEnabledSubprojects(config)) {
     if (selection && !selection.repos.includes(sub.repo)) {
       continue;
     }
-    const rel = path.join(config.subprojectsDir, sub.repo, "package.json");
-    assertRepoRelativePath(cwd, rel);
-    files.push(rel);
+    files.push(
+      resolveVersionFileRel(cwd, path.join(cwd, config.subprojectsDir, sub.repo), sub.appType),
+    );
   }
 
   return files;
+}
+
+/** Resolve the version file for a single project directory (e.g. a meta submodule). */
+export function resolveVersionFileForDir(
+  cwd: string,
+  dir: string,
+  appTypeOverride?: AppType,
+): string {
+  return resolveVersionFileRel(cwd, dir, appTypeOverride);
 }
 
 function sanitizeEnvironments(
@@ -287,6 +291,7 @@ function normalizeSubprojectEntry(
   const normalized: SubprojectConfig = {
     repo: entry.repo ?? defaults.repo,
     enabled: entry.enabled ?? defaults.enabled,
+    appType: entry.appType ?? defaults.appType,
   };
   if (defaults.create_pr) {
     normalized.create_pr = { ...defaults.create_pr, ...entry.create_pr };
@@ -310,6 +315,7 @@ export function createDefaultConfig(cwd: string): XEployConfig {
 
   const config: XEployConfig = {
     type,
+    appType: detectAppType(cwd),
     subprojectsDir,
     tag_prefix: detectTagPrefix(getRawTags(cwd)),
     generate_release_notes: true,
@@ -340,14 +346,10 @@ export function loadConfig(cwd: string = process.cwd()): XEployConfig | null {
     return null;
   }
   try {
-    const raw = JSON.parse(
-      fs.readFileSync(file, "utf8"),
-    ) as Partial<XEployConfig>;
+    const raw = JSON.parse(fs.readFileSync(file, "utf8")) as Partial<XEployConfig>;
     return normalizeConfig(raw, cwd);
   } catch {
-    console.warn(
-      `[xeploy] Failed to parse ${CONFIG_FILE} — using detected defaults.`,
-    );
+    console.warn(`[xeploy] Failed to parse ${CONFIG_FILE} — using detected defaults.`);
     return createDefaultConfig(cwd);
   }
 }
@@ -384,10 +386,7 @@ function normalizeSubprojectsConfig(
   return normalized;
 }
 
-function configHasMissingDefaults(
-  raw: Partial<XEployConfig>,
-  defaults: XEployConfig,
-): boolean {
+function configHasMissingDefaults(raw: Partial<XEployConfig>, defaults: XEployConfig): boolean {
   if (raw.type === undefined) {
     return true;
   }
@@ -462,10 +461,7 @@ function configHasMissingDefaults(
   return false;
 }
 
-function normalizeConfig(
-  raw: Partial<XEployConfig>,
-  cwd: string,
-): XEployConfig {
+function normalizeConfig(raw: Partial<XEployConfig>, cwd: string): XEployConfig {
   const defaults = createDefaultConfig(cwd);
   const subprojectDefaults = defaults.subprojects ?? [];
   const subprojects = normalizeSubprojectsConfig(raw.subprojects, subprojectDefaults);
@@ -482,17 +478,16 @@ function normalizeConfig(
   };
 }
 
-export function applyMissingDefaults(
-  cwd: string = process.cwd(),
-): { config: XEployConfig; updated: boolean } {
+export function applyMissingDefaults(cwd: string = process.cwd()): {
+  config: XEployConfig;
+  updated: boolean;
+} {
   const file = configPath(cwd);
   if (!fs.existsSync(file)) {
     return { config: createDefaultConfig(cwd), updated: false };
   }
 
-  const raw = JSON.parse(
-    fs.readFileSync(file, "utf8"),
-  ) as Partial<XEployConfig>;
+  const raw = JSON.parse(fs.readFileSync(file, "utf8")) as Partial<XEployConfig>;
   const defaults = createDefaultConfig(cwd);
   const config = normalizeConfig(raw, cwd);
   const updated = configHasMissingDefaults(raw, defaults);

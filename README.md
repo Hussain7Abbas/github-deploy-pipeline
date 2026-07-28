@@ -182,20 +182,43 @@ Create `.xeploy.json` in your project root (or let the CLI create it on first ru
 | `tag_prefix`                       | `string`    | auto-detected  | Prefix for git/GitHub tags (e.g. `"v"` → `v1.0.0`); package.json stays unprefixed                                          |
 | `generate_release_notes`           | `boolean`   | `true`         | Generate GitHub release notes vs previous tag                                                                              |
 | `create_production_release_branch` | `boolean`   | `true`         | Create `release/X.Y.Z` before production merge/PR                                                                          |
-| `create_tag`                       | `boolean`   | `true`         | Create git tag and GitHub release; when `false`, only bump `package.json`                                                  |
+| `create_tag`                       | `boolean`   | `true`         | Create git tag and GitHub release; when `false`, only bump the version file                                                  |
 | `create_pr`                        | `object`    | all `false`    | Open PR instead of direct merge per environment                                                                            |
 | `environments`                     | `object`    | branch-matched | Maps env names to git branch names (`null` if missing); only non-null release envs appear in "Select release environments" |
 | `subprojects`                      | `array`     | auto-detected  | Per-subproject config when `type` is `"mono"` or `"meta"` — see below                                                      |
 
-The `version` field of each subproject's own `package.json` is always what gets bumped — there's no separate `versionFiles` list to maintain.
+The `version` field of each subproject's version file is always what gets bumped — there's no separate `versionFiles` list to maintain.
+
+### Node and Flutter apps
+
+xeploy auto-detects whether a project uses Node or Flutter and picks the right version file:
+
+| App type | Version file   | Detection                                                                 |
+| -------- | -------------- | ------------------------------------------------------------------------- |
+| `node`   | `package.json` | Default when a `package.json` exists                                      |
+| `flutter`| `pubspec.yaml` | When `pubspec.yaml` has a `version:` field and Flutter dependencies/config |
+
+For Flutter, the semver in `pubspec.yaml` is read from the part before an optional `+build` suffix (for example `1.2.3+45` → `1.2.3`). On bump, the build suffix is preserved.
+
+Mono repos can mix Node and Flutter subprojects. Meta submodules detect their own version file independently. Override detection per repo with optional `appType` in `.xeploy.json`:
+
+```json
+{
+  "appType": "flutter",
+  "subprojects": [
+    { "repo": "mobile", "enabled": true, "appType": "flutter" },
+    { "repo": "api", "enabled": true, "appType": "node" }
+  ]
+}
+```
 
 ### Repository types
 
-| Type      | Detection                     | Behaviour                                  |
-| --------- | ----------------------------- | ------------------------------------------ |
-| `default` | single `package.json`         | standard single-repo release               |
-| `mono`    | multiple `package.json` files | version-bumps all configured packages      |
-| `meta`    | `.gitmodules` present         | parallel submodule releases, then umbrella |
+| Type      | Detection                                      | Behaviour                                  |
+| --------- | ---------------------------------------------- | ------------------------------------------ |
+| `default` | single Node or Flutter project                 | standard single-repo release               |
+| `mono`    | multiple `package.json` / `pubspec.yaml` roots | version-bumps all configured packages/apps |
+| `meta`    | `.gitmodules` present                          | parallel submodule releases, then umbrella |
 
 ### Subproject config
 
@@ -257,7 +280,7 @@ How would you like to bump?
 - **Bump each version separately** — every repo is bumped from its own current version (so repos stay on independent version lines).
 - **Unify them to X.Y.Z** — all repos are set to the same version, computed from the **highest** current version among selected repos.
 
-For `meta`, the "latest version" is each repo's latest git tag. For `mono`, it's the `version` field of each `package.json`. This step is skipped when versions already match or when a custom version was entered.
+For `meta`, the "latest version" is each repo's latest git tag. For `mono`, it's the version field of each project's version file (`package.json` or `pubspec.yaml`). This step is skipped when versions already match or when a custom version was entered.
 
 ---
 
