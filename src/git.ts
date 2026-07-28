@@ -237,6 +237,16 @@ export function currentBranch(cwd: string = process.cwd()): string {
   return assertBranchName(run("git", ["rev-parse", "--abbrev-ref", "HEAD"], cwd));
 }
 
+export function remoteBranchExists(
+  branch: string,
+  cwd: string = process.cwd(),
+): boolean {
+  const safeBranch = assertBranchName(branch);
+  return Boolean(
+    tryRun("git", ["ls-remote", "--heads", "origin", safeBranch], cwd),
+  );
+}
+
 export function listBranches(cwd: string = process.cwd()): string[] {
   const branches = new Set<string>();
 

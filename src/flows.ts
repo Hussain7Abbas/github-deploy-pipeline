@@ -13,6 +13,7 @@ import {
   getEnabledSubprojects,
   RC_ENVS,
   getConfiguredReleaseEnvs,
+  getSubprojectConfig,
   isRcEnv,
   resolveVersionFiles,
 } from "./config.js";
@@ -31,6 +32,7 @@ import {
   initSubmodules,
   listSubmodules,
   mergeOrPr,
+  remoteBranchExists,
   republishRc,
   requireCleanTree,
   resolveTagsWithSpinner,
@@ -417,6 +419,71 @@ function getPairedReleaseEnv(env: ReleaseEnv): ReleaseEnv | null {
   return PAIRED_RELEASE_ENVS[env] ?? null;
 }
 
+function isPairedEnvEnabled(
+  config: XEployConfig,
+  pairedEnv: ReleaseEnv,
+  metaOverride?: SubprojectConfig,
+): boolean {
+  return getMetaEnvBranch(config, pairedEnv, metaOverride) !== null;
+}
+
+function isPairedEnvEnabledForRelease(
+  config: XEployConfig,
+  pairedEnv: ReleaseEnv,
+  selection?: SubprojectSelection,
+): boolean {
+  if (config.type === "default" || !selection) {
+    return isPairedEnvEnabled(config, pairedEnv);
+  }
+
+  if (selection.includeUmbrella && isPairedEnvEnabled(config, pairedEnv)) {
+    return true;
+  }
+
+  for (const repo of selection.repos) {
+    const sub = getSubprojectConfig(config, repo);
+    if (isPairedEnvEnabled(config, pairedEnv, sub ?? undefined)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+async function ensureRemoteEnvBranch(opts: {
+  branchName: string;
+  fromBranch: string;
+  env: ReleaseEnv;
+  cwd: string;
+}): Promise<boolean> {
+  if (remoteBranchExists(opts.branchName, opts.cwd)) {
+    return true;
+  }
+
+  const create = await p.confirm({
+    message: `Branch "${opts.branchName}" (${opts.env}) does not exist on origin. Create it from "${opts.fromBranch}"?`,
+    initialValue: true,
+  });
+  if (p.isCancel(create)) {
+    abort();
+  }
+  if (!create) {
+    return false;
+  }
+
+  const s = p.spinner();
+  s.start(`Creating branch ${opts.branchName}`);
+  try {
+    createReleaseBranch(opts.branchName, opts.fromBranch, opts.cwd);
+    s.stop(`Branch ${opts.branchName} created`);
+    return true;
+  } catch {
+    s.stop("Failed to create branch");
+    p.log.error(`Could not create branch "${opts.branchName}".`);
+    return false;
+  }
+}
+
 async function promptMergePairedEnv(
   pairedEnv: ReleaseEnv,
   config: XEployConfig,
@@ -440,6 +507,8 @@ async function promptMergePairedEnv(
 async function promptMergePairedEnvUpfront(
   plan: ReleasePlan,
   config: XEployConfig,
+  cwd: string,
+  selection?: SubprojectSelection,
 ): Promise<ReleasePlan | typeof BACK> {
   const primaryEnv = plan.selectedEnvs[0];
   if (!primaryEnv) {
@@ -449,6 +518,27 @@ async function promptMergePairedEnvUpfront(
   const pairedEnv = getPairedReleaseEnv(primaryEnv);
   if (!pairedEnv) {
     return plan;
+  }
+
+  if (!isPairedEnvEnabledForRelease(config, pairedEnv, selection)) {
+    return plan;
+  }
+
+  const pairedBranch = getMetaEnvBranch(config, pairedEnv);
+  if (
+    pairedBranch &&
+    (config.type === "default" ||
+      (selection?.includeUmbrella && selection.repos.length === 0))
+  ) {
+    const branchReady = await ensureRemoteEnvBranch({
+      branchName: pairedBranch,
+      fromBranch: currentBranch(cwd),
+      env: pairedEnv,
+      cwd,
+    });
+    if (!branchReady) {
+      return plan;
+    }
   }
 
   const createPr = getCreatePr(config, pairedEnv);
@@ -882,12 +972,26 @@ export async function runReleaseTier(opts: {
       continue;
     }
 
+    if (!isPairedEnvEnabled(opts.config, pairedEnv, opts.metaOverride)) {
+      continue;
+    }
+
     const pairedBranch = getMetaEnvBranch(
       opts.config,
       pairedEnv,
       opts.metaOverride,
     );
     if (!pairedBranch) {
+      continue;
+    }
+
+    const branchReady = await ensureRemoteEnvBranch({
+      branchName: pairedBranch,
+      fromBranch: opts.branch,
+      env: pairedEnv,
+      cwd: opts.cwd,
+    });
+    if (!branchReady) {
       continue;
     }
 
@@ -1023,6 +1127,16 @@ export async function handleEnvPostRelease(opts: {
     return;
   }
 
+  const branchReady = await ensureRemoteEnvBranch({
+    branchName: envBranch,
+    fromBranch: opts.branch,
+    env: opts.env,
+    cwd: opts.cwd,
+  });
+  if (!branchReady) {
+    return;
+  }
+
   let sourceBranch = opts.branch;
 
   if (
@@ -1100,7 +1214,7 @@ export async function flowNewRelease(
       plan = resolved;
     }
 
-    const withMerge = await promptMergePairedEnvUpfront(plan, config);
+    const withMerge = await promptMergePairedEnvUpfront(plan, config, cwd, selection);
     if (isBack(withMerge)) {
       continue;
     }
