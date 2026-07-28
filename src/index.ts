@@ -7,12 +7,14 @@ export {
   configExists,
   configPath,
   getEnabledSubprojects,
+  resolveVersionFileForDir,
   resolveVersionFiles,
   validateConfig,
 } from "./config.js";
 export type {
   XEployConfig,
   RepoType,
+  AppType,
   EnvName,
   CreatePrEnv,
   ReleaseEnv,
@@ -46,6 +48,12 @@ export { runMetaRelease } from "./meta.js";
 export { parseSubmodules } from "./discover.js";
 export type { SubmoduleInfo } from "./discover.js";
 export {
+  detectAppType,
+  isProjectRoot,
+  resolveVersionFileName,
+  VERSION_FILE_BY_APP_TYPE,
+} from "./app-type.js";
+export {
   createRelease,
   createReleaseBranch,
   currentBranch,
@@ -78,6 +86,8 @@ export type { BackgroundTagFetch } from "./git.js";
 export {
   bumpVersionFiles,
   readPackageVersion,
+  readProjectVersion,
+  readVersionFromFile,
   setVersionInFile,
 } from "./versions.js";
 export {

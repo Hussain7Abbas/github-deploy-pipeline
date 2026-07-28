@@ -74,9 +74,7 @@ export function detectTagPrefix(rawTags: string[]): string {
     .map((t) => t.trim())
     .filter(Boolean)
     .map((raw) => ({ raw, semver: parseSemVer(raw) }))
-    .filter(
-      (entry): entry is { raw: string; semver: SemVer } => entry.semver !== null,
-    );
+    .filter((entry): entry is { raw: string; semver: SemVer } => entry.semver !== null);
 
   if (parsed.length === 0) {
     return "";

@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { resolveVersionFileName } from "./app-type.js";
 import { CONFIG_FILE } from "./config.js";
 import {
   currentBranch,
@@ -13,11 +14,62 @@ import { parseSemVer } from "./semver.js";
 import type { SemVer } from "./semver.js";
 import { assertRepoRelativePath, assertSemverTag } from "./validate.js";
 
+function versionFileKind(filePath: string): "json" | "pubspec" {
+  return path.basename(filePath) === "pubspec.yaml" ? "pubspec" : "json";
+}
+
+function stripPubspecBuild(version: string): { semver: string; build: string | null } {
+  const plus = version.indexOf("+");
+  if (plus === -1) {
+    return { semver: version.trim(), build: null };
+  }
+  return {
+    semver: version.slice(0, plus).trim(),
+    build: version.slice(plus + 1).trim() || null,
+  };
+}
+
+function readPubspecVersion(filePath: string): SemVer | null {
+  const content = fs.readFileSync(filePath, "utf8");
+  const match = content.match(/^version\s*:\s*(.+)$/m);
+  if (!match?.[1]) {
+    return null;
+  }
+  const { semver } = stripPubspecBuild(match[1].trim());
+  return parseSemVer(semver);
+}
+
+function setPubspecVersion(filePath: string, version: string): boolean {
+  const raw = fs.readFileSync(filePath, "utf8");
+  const match = raw.match(/^version\s*:\s*(.+)$/m);
+  if (!match?.[0]) {
+    return false;
+  }
+
+  const existing = match[1]?.trim() ?? "";
+  const { build } = stripPubspecBuild(existing);
+  const nextValue = build ? `${version}+${build}` : version;
+  if (existing === nextValue) {
+    return false;
+  }
+
+  const updated = raw.replace(/^version\s*:\s*.+$/m, `version: ${nextValue}`);
+  fs.writeFileSync(filePath, updated);
+  return true;
+}
+
 export function readPackageVersion(filePath: string): SemVer | null {
+  return readVersionFromFile(filePath);
+}
+
+export function readVersionFromFile(filePath: string): SemVer | null {
   if (!fs.existsSync(filePath)) {
     return null;
   }
   try {
+    if (versionFileKind(filePath) === "pubspec") {
+      return readPubspecVersion(filePath);
+    }
     const parsed = JSON.parse(fs.readFileSync(filePath, "utf8")) as {
       version?: unknown;
     };
@@ -30,7 +82,19 @@ export function readPackageVersion(filePath: string): SemVer | null {
   }
 }
 
+export function readProjectVersion(dir: string, overrideVersionFile?: string): SemVer | null {
+  const fileName = overrideVersionFile ?? resolveVersionFileName(dir);
+  if (!fileName) {
+    return null;
+  }
+  return readVersionFromFile(path.join(dir, fileName));
+}
+
 export function setVersionInFile(filePath: string, version: string): boolean {
+  if (versionFileKind(filePath) === "pubspec") {
+    return setPubspecVersion(filePath, version);
+  }
+
   const raw = fs.readFileSync(filePath, "utf8");
   const parsed = JSON.parse(raw) as Record<string, unknown>;
   if (parsed.version === version) {

@@ -1,5 +1,5 @@
-import * as p from "@clack/prompts";
 import * as path from "node:path";
+import * as p from "@clack/prompts";
 import type {
   CreatePrEnv,
   ReleaseEnv,
@@ -10,16 +10,17 @@ import type {
 import {
   CONFIG_FILE,
   FINAL_ENVS,
-  getEnabledSubprojects,
   RC_ENVS,
   getConfiguredReleaseEnvs,
+  getEnabledSubprojects,
   isRcEnv,
+  resolveVersionFileForDir,
   resolveVersionFiles,
 } from "./config.js";
 import {
+  checkRepoWriteAccess,
   createRelease,
   createReleaseBranch,
-  checkRepoWriteAccess,
   currentBranch,
   fetchTags,
   getLatestFinalTag,
@@ -39,7 +40,6 @@ import {
 } from "./git.js";
 import type { BackgroundTagFetch } from "./git.js";
 import { BACK, abort, cancelAsBack, isBack } from "./prompts-util.js";
-import { resolveSubmodulePath } from "./validate.js";
 import {
   bumpVersion,
   compareSemVer,
@@ -50,13 +50,10 @@ import {
   toGitTag,
 } from "./semver.js";
 import type { BumpType, SemVer } from "./semver.js";
-import { bumpVersionFiles, readPackageVersion } from "./versions.js";
+import { resolveSubmodulePath } from "./validate.js";
+import { bumpVersionFiles, readProjectVersion } from "./versions.js";
 
-function releaseNote(
-  tag: string,
-  notesStart: string | null,
-  prerelease: boolean,
-): string {
+function releaseNote(tag: string, notesStart: string | null, prerelease: boolean): string {
   return [
     `Tag:         ${tag}  (${prerelease ? "pre-release" : "final"})`,
     `Notes since: ${notesStart ?? "beginning of history"}`,
@@ -67,11 +64,7 @@ function stripRc(version: SemVer): SemVer {
   return { ...version, rc: null };
 }
 
-function resolveBumpBase(
-  tags: SemVer[],
-  needsRc: boolean,
-  needsFinal: boolean,
-): SemVer | null {
+function resolveBumpBase(tags: SemVer[], needsRc: boolean, needsFinal: boolean): SemVer | null {
   const latest = getLatestTag(tags);
   const latestFinal = getLatestFinalTag(tags);
   const latestRc = getLatestRcTag(tags);
@@ -89,11 +82,7 @@ function resolveBumpBase(
   return latest;
 }
 
-function formatBumpPreview(
-  bumped: SemVer,
-  needsRc: boolean,
-  needsFinal: boolean,
-): string {
+function formatBumpPreview(bumped: SemVer, needsRc: boolean, needsFinal: boolean): string {
   if (needsFinal && !needsRc) {
     return formatSemVer(stripRc(bumped));
   }
@@ -137,10 +126,7 @@ function getCreatePr(
   return config.create_pr[env];
 }
 
-function getCreateTag(
-  config: XEployConfig,
-  metaOverride?: SubprojectConfig,
-): boolean {
+function getCreateTag(config: XEployConfig, metaOverride?: SubprojectConfig): boolean {
   if (metaOverride?.create_tag !== undefined) {
     return metaOverride.create_tag;
   }
@@ -207,9 +193,7 @@ export function verifySelectedRepoAccess(
 
   if (config.type === "meta") {
     initSubmodules(cwd);
-    const submoduleByName = new Map(
-      listSubmodules(cwd).map((sub) => [sub.name, sub]),
-    );
+    const submoduleByName = new Map(listSubmodules(cwd).map((sub) => [sub.name, sub]));
 
     if (selection.includeUmbrella) {
       checks.push(checkRepoWriteAccess(cwd, "Umbrella (this repo)"));
@@ -226,9 +210,7 @@ export function verifySelectedRepoAccess(
         });
         continue;
       }
-      checks.push(
-        checkRepoWriteAccess(resolveSubmodulePath(cwd, sub.path), repoName),
-      );
+      checks.push(checkRepoWriteAccess(resolveSubmodulePath(cwd, sub.path), repoName));
     }
   } else if (config.type === "mono") {
     if (selection.includeUmbrella || selection.repos.length > 0) {
@@ -268,8 +250,7 @@ async function promptBumpType(
   cwd: string,
   tagPrefix: string,
 ): Promise<
-  | { rcTag: string | null; finalTag: string | null; bumpType: BumpType | "custom" }
-  | typeof BACK
+  { rcTag: string | null; finalTag: string | null; bumpType: BumpType | "custom" } | typeof BACK
 > {
   const latest = getLatestTag(tags);
   const baseForBump = resolveBumpBase(tags, needsRc, needsFinal);
@@ -335,11 +316,7 @@ async function promptBumpType(
                 return `Tag "${toGitTag(v, tagPrefix)}" already exists`;
               }
               const parsed = parseSemVer(v);
-              if (
-                parsed &&
-                compareBase &&
-                compareSemVer(parsed, compareBase) <= 0
-              ) {
+              if (parsed && compareBase && compareSemVer(parsed, compareBase) <= 0) {
                 return `Version must be greater than current latest "${compareStr}"`;
               }
             },
@@ -353,14 +330,9 @@ async function promptBumpType(
           abort();
         }
         const rcTag = parsed.rc !== null ? (customTag as string) : null;
-        const finalTag =
-          parsed.rc === null
-            ? (customTag as string)
-            : formatSemVer(stripRc(parsed));
+        const finalTag = parsed.rc === null ? (customTag as string) : formatSemVer(stripRc(parsed));
         return {
-          rcTag: needsRc
-            ? (rcTag ?? formatSemVer({ ...parsed, rc: parsed.rc ?? 1 }))
-            : null,
+          rcTag: needsRc ? (rcTag ?? formatSemVer({ ...parsed, rc: parsed.rc ?? 1 })) : null,
           finalTag: needsFinal ? finalTag : null,
           bumpType: "custom",
         };
@@ -368,12 +340,7 @@ async function promptBumpType(
       continue;
     }
 
-    const tierTags = computeTierTags(
-      tags,
-      bumpChoice as BumpType,
-      needsRc,
-      needsFinal,
-    );
+    const tierTags = computeTierTags(tags, bumpChoice as BumpType, needsRc, needsFinal);
     return { ...tierTags, bumpType: bumpChoice as BumpType };
   }
 }
@@ -423,9 +390,7 @@ async function promptMergePairedEnv(
   metaOverride?: SubprojectConfig,
 ): Promise<boolean> {
   const createPr = getCreatePr(config, pairedEnv, metaOverride);
-  const message = createPr
-    ? `Open PR into ${pairedEnv}?`
-    : `Also merge into ${pairedEnv}?`;
+  const message = createPr ? `Open PR into ${pairedEnv}?` : `Also merge into ${pairedEnv}?`;
 
   const merge = await p.confirm({
     message,
@@ -453,9 +418,7 @@ async function promptMergePairedEnvUpfront(
 
   const createPr = getCreatePr(config, pairedEnv);
   const repoScope =
-    config.type === "meta" || config.type === "mono"
-      ? " for all selected repos"
-      : "";
+    config.type === "meta" || config.type === "mono" ? " for all selected repos" : "";
   const message = createPr
     ? `Open PR into ${pairedEnv}${repoScope}?`
     : `Also merge into ${pairedEnv}${repoScope}?`;
@@ -503,13 +466,7 @@ export async function planRelease(
 
     while (true) {
       const tags = await resolveTagsWithSpinner(tagFetch, cwd);
-      const bumpResult = await promptBumpType(
-        tags,
-        needsRc,
-        needsFinal,
-        cwd,
-        config.tag_prefix,
-      );
+      const bumpResult = await promptBumpType(tags, needsRc, needsFinal, cwd, config.tag_prefix);
       if (isBack(bumpResult)) {
         break;
       }
@@ -531,10 +488,7 @@ interface RepoVersionInfo {
   latest: SemVer | null;
 }
 
-function gatherMetaRepoVersions(
-  cwd: string,
-  selection: SubprojectSelection,
-): RepoVersionInfo[] {
+function gatherMetaRepoVersions(cwd: string, selection: SubprojectSelection): RepoVersionInfo[] {
   const infos: RepoVersionInfo[] = [];
 
   if (selection.includeUmbrella) {
@@ -578,7 +532,7 @@ function gatherMonoRepoVersions(
   const infos: RepoVersionInfo[] = [];
 
   if (selection.includeUmbrella) {
-    const latest = readPackageVersion(path.join(cwd, "package.json"));
+    const latest = readProjectVersion(cwd);
     infos.push({
       key: UMBRELLA_SELECTION,
       label: "Umbrella (this repo)",
@@ -594,9 +548,7 @@ function gatherMonoRepoVersions(
       if (!enabled.has(repo)) {
         continue;
       }
-      const latest = readPackageVersion(
-        path.join(cwd, config.subprojectsDir, repo, "package.json"),
-      );
+      const latest = readProjectVersion(path.join(cwd, config.subprojectsDir, repo), undefined);
       infos.push({
         key: repo,
         label: repo,
@@ -611,9 +563,7 @@ function gatherMonoRepoVersions(
 }
 
 function versionsInconsistent(infos: RepoVersionInfo[]): boolean {
-  const bases = infos.map((i) =>
-    i.latest ? baseVersionString(i.latest) : "(none)",
-  );
+  const bases = infos.map((i) => (i.latest ? baseVersionString(i.latest) : "(none)"));
   return new Set(bases).size > 1;
 }
 
@@ -671,12 +621,7 @@ async function resolveRepoVersionConsistency(
     info,
     tags: computeTierTags(info.tags, bumpType, needsRc, needsFinal),
   }));
-  const unifyTags = computeTierTags(
-    highestRepoVersion(infos).tags,
-    bumpType,
-    needsRc,
-    needsFinal,
-  );
+  const unifyTags = computeTierTags(highestRepoVersion(infos).tags, bumpType, needsRc, needsFinal);
 
   const separateLabel = `Bump each version separately (${separate
     .map((e) => `${e.info.label}: ${displayTierTag(e.tags)}`)
@@ -731,6 +676,7 @@ function monoFileVersionsForTier(
   config: XEployConfig,
   plan: ReleasePlan,
   tier: "rc" | "final",
+  cwd: string,
 ): Record<string, string> {
   const map: Record<string, string> = {};
   if (!plan.perRepoTags || !config.subprojectsDir) {
@@ -741,7 +687,9 @@ function monoFileVersionsForTier(
     if (!version) {
       continue;
     }
-    map[path.join(config.subprojectsDir, repo, "package.json")] = version;
+    const sub = getEnabledSubprojects(config).find((s) => s.repo === repo);
+    map[resolveVersionFileForDir(cwd, path.join(cwd, config.subprojectsDir, repo), sub?.appType)] =
+      version;
   }
   return map;
 }
@@ -757,16 +705,12 @@ async function preflightReleasePlan(
   const latest = getLatestTag(tags);
   const latestFinal = getLatestFinalTag(tags);
   const notesStartRc = latest ? formatGitTag(latest, config.tag_prefix) : null;
-  const notesStartFinal = latestFinal
-    ? formatGitTag(latestFinal, config.tag_prefix)
-    : null;
+  const notesStartFinal = latestFinal ? formatGitTag(latestFinal, config.tag_prefix) : null;
 
   if (!options?.skipSummary) {
     const summaryLines: string[] = [];
     if (plan.rcTag) {
-      summaryLines.push(
-        releaseNote(toGitTag(plan.rcTag, config.tag_prefix), notesStartRc, true),
-      );
+      summaryLines.push(releaseNote(toGitTag(plan.rcTag, config.tag_prefix), notesStartRc, true));
     }
     if (plan.finalTag) {
       summaryLines.push(
@@ -779,10 +723,7 @@ async function preflightReleasePlan(
     if (primaryEnv) {
       const pairedEnv = getPairedReleaseEnv(primaryEnv);
       if (pairedEnv && plan.mergePairedEnv !== undefined) {
-        const scope =
-          config.type === "meta" || config.type === "mono"
-            ? " (all repos)"
-            : "";
+        const scope = config.type === "meta" || config.type === "mono" ? " (all repos)" : "";
         summaryLines.push(
           `Also sync to ${pairedEnv}: ${plan.mergePairedEnv ? "yes" : "no"}${scope}`,
         );
@@ -796,17 +737,13 @@ async function preflightReleasePlan(
       const perRepoLines = Object.entries(plan.perRepoTags).map(
         ([repo, tierTags]) => `  ${repo}: ${displayTierTag(tierTags)}`,
       );
-      summaryLines.push(
-        ["Per-repo versions (separate bump):", ...perRepoLines].join("\n"),
-      );
+      summaryLines.push(["Per-repo versions (separate bump):", ...perRepoLines].join("\n"));
     }
 
     p.note(summaryLines.join("\n\n"), "Release summary");
   }
 
-  const ok = cancelAsBack(
-    await p.confirm({ message: "Proceed?", initialValue: true }),
-  );
+  const ok = cancelAsBack(await p.confirm({ message: "Proceed?", initialValue: true }));
   if (isBack(ok)) {
     return BACK;
   }
@@ -861,9 +798,7 @@ export async function runReleaseTier(opts: {
     });
     s.stop(`Release ${toGitTag(opts.tag, tagPrefix)} created`);
   } else {
-    p.log.info(
-      `Skipping tag creation for ${toGitTag(opts.tag, tagPrefix)} (create_tag: false)`,
-    );
+    p.log.info(`Skipping tag creation for ${toGitTag(opts.tag, tagPrefix)} (create_tag: false)`);
   }
 
   for (const env of opts.envs) {
@@ -882,11 +817,7 @@ export async function runReleaseTier(opts: {
       continue;
     }
 
-    const pairedBranch = getMetaEnvBranch(
-      opts.config,
-      pairedEnv,
-      opts.metaOverride,
-    );
+    const pairedBranch = getMetaEnvBranch(opts.config, pairedEnv, opts.metaOverride);
     if (!pairedBranch) {
       continue;
     }
@@ -894,11 +825,7 @@ export async function runReleaseTier(opts: {
     const mergePaired =
       opts.mergePairedEnv !== undefined
         ? opts.mergePairedEnv
-        : await promptMergePairedEnv(
-            pairedEnv,
-            opts.config,
-            opts.metaOverride,
-          );
+        : await promptMergePairedEnv(pairedEnv, opts.config, opts.metaOverride);
     if (!mergePaired) {
       continue;
     }
@@ -941,23 +868,21 @@ export async function executeReleasePlan(
 
   const repoRoot = options?.repoRoot ?? cwd;
   const versionFiles = options?.submoduleRelPath
-    ? ["package.json"]
+    ? [resolveVersionFileForDir(cwd, cwd, options.metaOverride?.appType)]
     : resolveVersionFiles(config, repoRoot, options?.selection);
   const metaOverride = options?.metaOverride;
   const branch = currentBranch(cwd);
   const latest = getLatestTag(tags);
   const latestFinal = getLatestFinalTag(tags);
   const notesStartRc = latest ? formatGitTag(latest, config.tag_prefix) : null;
-  const notesStartFinal = latestFinal
-    ? formatGitTag(latestFinal, config.tag_prefix)
-    : null;
+  const notesStartFinal = latestFinal ? formatGitTag(latestFinal, config.tag_prefix) : null;
 
   const includeConfigIfDirty = !options?.submoduleRelPath;
   const rcEnvs = plan.selectedEnvs.filter((e) => isRcEnv(e));
   const finalEnvs = plan.selectedEnvs.filter((e) => !isRcEnv(e));
 
-  // Per-file version overrides only apply to the umbrella `package.json` set of
-  // a mono repo. Meta submodules bump their own `package.json` from their own
+  // Per-file version overrides only apply to the umbrella version file set of
+  // a mono repo. Meta submodules bump their own version file from their own
   // (already per-repo overridden) plan, so they don't use file overrides.
   const isMono = config.type === "mono" && !options?.submoduleRelPath;
 
@@ -978,9 +903,7 @@ export async function executeReleasePlan(
       cwd,
       metaOverride,
       includeConfigIfDirty,
-      fileVersions: isMono
-        ? monoFileVersionsForTier(config, plan, "rc")
-        : undefined,
+      fileVersions: isMono ? monoFileVersionsForTier(config, plan, "rc", repoRoot) : undefined,
       ...tierOpts,
     });
   }
@@ -997,9 +920,7 @@ export async function executeReleasePlan(
       config,
       metaOverride,
       includeConfigIfDirty,
-      fileVersions: isMono
-        ? monoFileVersionsForTier(config, plan, "final")
-        : undefined,
+      fileVersions: isMono ? monoFileVersionsForTier(config, plan, "final", repoRoot) : undefined,
       ...tierOpts,
     });
   }
@@ -1016,19 +937,13 @@ export async function handleEnvPostRelease(opts: {
 }): Promise<void> {
   const envBranch = getMetaEnvBranch(opts.config, opts.env, opts.metaOverride);
   if (!envBranch) {
-    p.note(
-      `Environment "${opts.env}" has no branch mapped — skipping.`,
-      "Skipped",
-    );
+    p.note(`Environment "${opts.env}" has no branch mapped — skipping.`, "Skipped");
     return;
   }
 
   let sourceBranch = opts.branch;
 
-  if (
-    opts.env === "production" &&
-    opts.config.create_production_release_branch
-  ) {
+  if (opts.env === "production" && opts.config.create_production_release_branch) {
     const releaseBranch = formatReleaseBranch(opts.tag, opts.config.tag_prefix);
     const s = p.spinner();
     s.start(`Creating release branch ${releaseBranch}`);
@@ -1038,9 +953,7 @@ export async function handleEnvPostRelease(opts: {
       s.stop(`Release branch ${releaseBranch} created`);
     } catch {
       s.stop("Failed to create release branch");
-      p.log.error(
-        "Could not create release branch. Continuing with current branch.",
-      );
+      p.log.error("Could not create release branch. Continuing with current branch.");
     }
   }
 
@@ -1088,12 +1001,7 @@ export async function flowNewRelease(
     }
 
     if (selection) {
-      const resolved = await resolveRepoVersionConsistency(
-        plan,
-        config,
-        cwd,
-        selection,
-      );
+      const resolved = await resolveRepoVersionConsistency(plan, config, cwd, selection);
       if (isBack(resolved)) {
         continue;
       }
@@ -1183,9 +1091,7 @@ export async function flowOldRelease(
         p.note(
           [
             `Tag: ${toGitTag(chosen as string, config.tag_prefix)}  (pre-release, unchanged)`,
-            alreadyExists
-              ? "Existing GitHub release will be deleted and re-created."
-              : "",
+            alreadyExists ? "Existing GitHub release will be deleted and re-created." : "",
           ]
             .filter(Boolean)
             .join("\n"),
@@ -1193,9 +1099,7 @@ export async function flowOldRelease(
         );
 
         while (true) {
-          const ok = cancelAsBack(
-            await p.confirm({ message: "Proceed?", initialValue: true }),
-          );
+          const ok = cancelAsBack(await p.confirm({ message: "Proceed?", initialValue: true }));
           if (isBack(ok)) {
             break;
           }
@@ -1223,9 +1127,7 @@ export async function flowOldRelease(
       const finalVer: SemVer = { ...parsed, rc: null };
       const finalTag = formatSemVer(finalVer);
       const latestFinal = getLatestFinalTag(tags);
-      const notesStartTag = latestFinal
-        ? formatGitTag(latestFinal, config.tag_prefix)
-        : null;
+      const notesStartTag = latestFinal ? formatGitTag(latestFinal, config.tag_prefix) : null;
       const branch = currentBranch(cwd);
       const productionBranch = config.environments.production;
       const versionFiles = resolveVersionFiles(config, cwd);
@@ -1241,9 +1143,7 @@ export async function flowOldRelease(
       );
 
       while (true) {
-        const ok = cancelAsBack(
-          await p.confirm({ message: "Proceed?", initialValue: true }),
-        );
+        const ok = cancelAsBack(await p.confirm({ message: "Proceed?", initialValue: true }));
         if (isBack(ok)) {
           break;
         }
@@ -1279,10 +1179,7 @@ export async function flowOldRelease(
         if (productionBranch) {
           let sourceBranch = branch;
           if (config.create_production_release_branch) {
-            const releaseBranch = formatReleaseBranch(
-              finalTag,
-              config.tag_prefix,
-            );
+            const releaseBranch = formatReleaseBranch(finalTag, config.tag_prefix);
             const rs = p.spinner();
             rs.start(`Creating release branch ${releaseBranch}`);
             try {

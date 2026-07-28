@@ -111,9 +111,7 @@ async function runUmbrellaRelease(
   const latest = getLatestTag(tags);
   const latestFinal = getLatestFinalTag(tags);
   const notesStartRc = latest ? formatGitTag(latest, config.tag_prefix) : null;
-  const notesStartFinal = latestFinal
-    ? formatGitTag(latestFinal, config.tag_prefix)
-    : null;
+  const notesStartFinal = latestFinal ? formatGitTag(latestFinal, config.tag_prefix) : null;
   const versionFiles = resolveVersionFiles(config, cwd);
 
   const rcEnvs = plan.selectedEnvs.filter((e) => isRcEnv(e));

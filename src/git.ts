@@ -1,5 +1,5 @@
-import * as p from "@clack/prompts";
 import { spawn } from "node:child_process";
+import * as p from "@clack/prompts";
 import { parseSubmodules } from "./discover.js";
 import { spawnSyncFile, trySpawnSyncFile } from "./exec.js";
 import { compareSemVer, parseSemVer, toGitTag } from "./semver.js";
@@ -52,10 +52,7 @@ export interface RepoAccessCheck {
   error?: string;
 }
 
-export function checkRepoWriteAccess(
-  repoCwd: string,
-  label: string,
-): RepoAccessCheck {
+export function checkRepoWriteAccess(repoCwd: string, label: string): RepoAccessCheck {
   const originUrl = tryRun("git", ["remote", "get-url", "origin"], repoCwd);
   if (!originUrl) {
     return {
@@ -66,11 +63,7 @@ export function checkRepoWriteAccess(
     };
   }
 
-  const raw = tryRun(
-    "gh",
-    ["repo", "view", "--json", "nameWithOwner,viewerPermission"],
-    repoCwd,
-  );
+  const raw = tryRun("gh", ["repo", "view", "--json", "nameWithOwner,viewerPermission"], repoCwd);
   if (!raw) {
     const slug = parseGitHubRepoSlug(originUrl) ?? originUrl;
     return {
@@ -139,9 +132,7 @@ export interface BackgroundTagFetch {
   getLocalTags: () => SemVer[];
 }
 
-export function startBackgroundTagFetch(
-  cwd: string = process.cwd(),
-): BackgroundTagFetch {
+export function startBackgroundTagFetch(cwd: string = process.cwd()): BackgroundTagFetch {
   let settled = false;
   const ready = new Promise<void>((resolve) => {
     const child = spawn("git", ["fetch", "--tags", "--prune", "origin"], {
@@ -206,10 +197,7 @@ export function getDirtyPaths(cwd: string = process.cwd()): string[] {
   if (!raw) {
     return [];
   }
-  return raw
-    .split("\n")
-    .filter(Boolean)
-    .map(parsePorcelainPath);
+  return raw.split("\n").filter(Boolean).map(parsePorcelainPath);
 }
 
 export function requireCleanTree(
@@ -324,20 +312,12 @@ export function getRcTags(tags: SemVer[]): SemVer[] {
   return tags.filter((v) => v.rc !== null).sort((a, b) => compareSemVer(b, a));
 }
 
-export function tagExists(
-  tag: string,
-  cwd: string = process.cwd(),
-  tagPrefix = "",
-): boolean {
+export function tagExists(tag: string, cwd: string = process.cwd(), tagPrefix = ""): boolean {
   const gitTag = toGitTag(tag, tagPrefix);
   return tryRun("git", ["rev-parse", "--verify", `refs/tags/${gitTag}`], cwd) !== null;
 }
 
-export function ghReleaseExists(
-  tag: string,
-  cwd: string = process.cwd(),
-  tagPrefix = "",
-): boolean {
+export function ghReleaseExists(tag: string, cwd: string = process.cwd(), tagPrefix = ""): boolean {
   const gitTag = toGitTag(tag, tagPrefix);
   const out = tryRun("gh", ["release", "view", gitTag], cwd);
   return out !== null;
@@ -348,11 +328,7 @@ export function pushBranch(branch: string, cwd: string = process.cwd()): void {
   runInherit("git", ["push", "-u", "origin", safeBranch], cwd);
 }
 
-export function pushTag(
-  tag: string,
-  cwd: string = process.cwd(),
-  tagPrefix = "",
-): void {
+export function pushTag(tag: string, cwd: string = process.cwd(), tagPrefix = ""): void {
   const gitTag = toGitTag(tag, tagPrefix);
   runInherit("git", ["push", "origin", gitTag], cwd);
 }
